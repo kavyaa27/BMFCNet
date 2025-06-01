@@ -1,0 +1,125 @@
+import os
+import numpy as np
+import pandas as pd
+import scipy.io
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    classification_report,
+    confusion_matrix,
+    roc_curve,
+    auc,
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score
+)
+
+from tensorflow.keras.models import load_model
+
+# ====== LOAD DATA ======
+def load_eeg_data(data_dir, csv_path, target_length=1024):  # ✅ Set to 1024 to match model input
+    X = []
+    y = []
+
+    df = pd.read_csv(csv_path)
+    df.columns = df.columns.str.strip()
+    df = df.dropna(subset=["Data Id", "label"])
+    df["Data Id"] = df["Data Id"].astype(int).astype(str)
+    label_map = dict(zip(df["Data Id"], df["label"]))
+
+    for file in os.listdir(data_dir):
+        if file.endswith(".mat") and file.startswith("data_"):
+            file_id = file.replace("data_", "").replace(".mat", "").strip()
+            if file_id not in label_map:
+                continue
+
+            mat_path = os.path.join(data_dir, file)
+            mat = scipy.io.loadmat(mat_path)
+            if "data" not in mat:
+                continue
+
+            signal = mat["data"]
+            if signal.shape[0] < signal.shape[1]:
+                signal = signal.T  # Make sure it's (time, channels)
+
+            if signal.shape[0] >= target_length:
+                signal = signal[:target_length, :]
+            else:
+                pad_len = target_length - signal.shape[0]
+                signal = np.pad(signal, ((0, pad_len), (0, 0)), mode='constant')
+
+            if signal.shape != (target_length, 20):
+                continue
+
+            X.append(signal)
+            y.append(label_map[file_id])
+
+    if len(X) == 0:
+        raise ValueError("No valid EEG data loaded.")
+
+    X = np.array(X)  # Shape: (samples, time, channels)
+    y = np.array(y).astype(int)
+    return X, y
+
+# ====== PLOTTING FUNCTIONS ======
+def plot_confusion(y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(6, 4))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=['Non-Depressed', 'Depressed'],
+                yticklabels=['Non-Depressed', 'Depressed'])
+    plt.xlabel("Predicted")
+    plt.ylabel("Actual")
+    plt.title("Confusion Matrix")
+    plt.tight_layout()
+    plt.show()
+
+def plot_roc(y_true, y_prob):
+    fpr, tpr, _ = roc_curve(y_true, y_prob)
+    roc_auc = auc(fpr, tpr)
+    plt.figure(figsize=(6, 4))
+    plt.plot(fpr, tpr, color='darkorange', lw=2, label=f"AUC = {roc_auc:.2f}")
+    plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.show()
+
+def print_classification_report(y_true, y_pred):
+    report = classification_report(y_true, y_pred, target_names=['Non-Depressed', 'Depressed'])
+    print("Classification Report:\n", report)
+
+# ====== MAIN ======
+if __name__ == "__main__":  # ✅ Corrected this line
+    data_dir = r"C:\Users\Aaditimalhotra22\Desktop\research paper\EEG-Depression-Dataset-main\Depression dataset"
+    csv_path = r"C:\Users\Aaditimalhotra22\Desktop\research paper\EEG-Depression-Dataset-main\labels_processed.csv"
+    model_path = r"C:\Users\Aaditimalhotra22\Desktop\research paper\EEG-Depression-Dataset-main\bmfcnet_model.h5"
+
+    # Load Data
+    X, y = load_eeg_data(data_dir, csv_path, target_length=1024)  # ✅ Target shape for model
+    print("Shape of X:", X.shape)  # Optional: Check shape (samples, 1024, 20)
+
+    # No transpose needed — keep shape (samples, time, channels)
+
+    # Split for evaluation
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+    # Load model and predict
+    model = load_model(model_path)
+    y_prob = model.predict(X_test).ravel()
+    y_pred = (y_prob >= 0.5).astype(int)
+
+    # Visualizations
+    plot_confusion(y_test, y_pred)
+    plot_roc(y_test, y_prob)
+    print_classification_report(y_test, y_pred)
+
+    # Metric values
+    print(f"Accuracy:  {accuracy_score(y_test, y_pred):.2f}")
+    print(f"Precision: {precision_score(y_test, y_pred):.2f}")
+    print(f"Recall:    {recall_score(y_test, y_pred):.2f}")
